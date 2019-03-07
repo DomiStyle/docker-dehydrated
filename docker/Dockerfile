@@ -16,10 +16,13 @@ COPY docker/entrypoint.sh /entrypoint.sh
 # Copy default config
 COPY docker/default.config /app/default.config
 
-RUN chmod +x /app/dehydrated
+# Make dehydrated and entrypoint executable
+RUN chmod +x /app/dehydrated && \
+    chmod +x /entrypoint.sh
 
 WORKDIR /app
 
+# Add default values
 ENV CA=https://acme-v01.api.letsencrypt.org/directory \
     CHALLENGETYPE=http-01 \
     BASEDIR=/data \
@@ -29,5 +32,6 @@ ENV CA=https://acme-v01.api.letsencrypt.org/directory \
     KEY_ALGO=rsa \
     AUTO_CLEANUP=no
 
+# Set entrypoint and default command
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ./dehydrated -f ${BASEDIR}/config -c

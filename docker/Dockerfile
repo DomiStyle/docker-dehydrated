@@ -14,7 +14,7 @@ ADD https://raw.githubusercontent.com/AnalogJ/lexicon/master/examples/dehydrated
 COPY docker/entrypoint.sh /entrypoint.sh
 
 # Copy default config
-COPY docker/config /app/default.config
+COPY docker/default.config /app/default.config
 
 RUN chmod +x /app/dehydrated
 

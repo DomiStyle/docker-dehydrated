@@ -7,14 +7,14 @@ RUN apt-get update && \
     pip install requests[security] dns-lexicon
 
 # Copy dehydrated and lexicon hook
-COPY dehydrated LICENSE /app/
+COPY ../dehydrated ../LICENSE /app/
 ADD https://raw.githubusercontent.com/AnalogJ/lexicon/master/examples/dehydrated.default.sh /app/hook.sh
 
 # Copy entrypoint to root
-COPY docker/entrypoint.sh /entrypoint.sh
+COPY entrypoint.sh /entrypoint.sh
 
 # Copy default config
-COPY docker/default.config /app/default.config
+COPY default.config /app/default.config
 
 # Make dehydrated, hook and entrypoint executable
 RUN chmod +x /app/dehydrated && \

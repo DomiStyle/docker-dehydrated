@@ -120,6 +120,37 @@ Other things needed in order for nginx to run:
 
 * Create any other site you need as usual after you received your certificates
 
+## Automatic renew
+
+Since certificates signed by Let's Encrypt expire after 90 days they need to be renewed automatically. By default the container exits after running dehydrated, expecting to be run again from an external source.
+
+**Don't forget to reload your webserver too.**
+
+You can do this in nginx with ``nginx -s reload`` or ``systemctl reload nginx``.
+
+### Host Cronjob
+
+The cronjob service running on the host can be used to start the container(s) automatically.
+
+    0 5 * * * docker-compose -f /path/to/docker-compose.yml start letsencrypt-dns
+    0 5 * * * docker-compose -f /path/to/docker-compose.yml start letsencrypt-http
+
+To also reload nginx you can add the following line:
+
+    0 6 * * * docker-compose -f path/to/docker-compose.yml exec nginx nginx -s reload
+
+### Orchestrator
+
+Many orchestrators allow creating cronjobs to start a container at a spcified time.
+
+For example, Rancher 1.6 supports the cron.schedule label while Kubernetes allows adding a CronJob directly.
+
+### Internal
+
+The container comes with an environment variable to keep it running forever and repeat certificate requests automatically. While this is not recommended, it allows you to get started quickly if no alternative is available.
+
+    docker run -e REPEAT=true -e REPEAT_INTERVAL=86400 domistyle/dehydrated
+
 ## Environment variables
 
 The following environment variables are available:
@@ -132,6 +163,8 @@ The following environment variables are available:
 | `LEXICON_<PROVIDER NAME>_USERNAME` | Sets the username to use for a provider (DNS-01 only) | - | No |
 | `LEXICON_<PROVIDER NAME>_TOKEN` | Sets the token to use for a provider (DNS-01 only) | - | No |
 | `LEXICON_<PROVIDER NAME>_PASSWORD` | Sets the password to use for a provider (DNS-01 only) | - | No |
+| `REPEAT` | Set to true to never exit the container and repeat the command every REPEAT_INTERVAL | - | No |
+| `REPEAT_INTERVAL` | If REPEAT is set dehydrated will automatically be started every REPEAT_INTERVAL (in seconds) | - | No |
 | `PARAM_HOOK` | The path for the hook script to execute for DNS-01 validation | ``/app/hook.sh`` | No |`
 
 For more environment variables check the GitHub page for [dehydrated](https://github.com/lukas2511/dehydrated) and [Lexicon](https://github.com/AnalogJ/lexicon).

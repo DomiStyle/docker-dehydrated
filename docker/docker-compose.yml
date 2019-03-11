@@ -1,0 +1,33 @@
+nginx:
+  image: nginx
+  restart: always
+  ports:
+    - 80:80
+    - 443:443
+  volumes:
+    - ./certs:/etc/nginx/certs:ro
+    - ./challenges:/var/www/challenges:ro
+    - ./config:/etc/nginx/conf.d:ro
+    - ./snippets:/etc/nginx/snippets:ro
+    - ./dh:/etc/nginx/dh:ro
+  environment:
+    TZ: Europe/Berlin
+letsencrypt-dns:
+  image: domistyle/dehydrated
+  volumes:
+    - ./dehydrated-dns:/data
+    - ./certs:/data/certs
+  environment:
+    - PARAM_CHALLENGETYPE=dns-01
+    - PROVIDER=digitalocean
+    - LEXICON_DIGITALOCEAN_TOKEN=000000000000000000
+    - TZ=Europe/Berlin
+letsencrypt-http:
+  image: domistyle/dehydrated
+  volumes:
+    - ./dehydrated-http:/data
+    - ./certs:/data/certs
+    - ./challenges:/data/challenges
+  environment:
+    - PARAM_CHALLENGETYPE=http-01
+    - TZ=Europe/Berlin

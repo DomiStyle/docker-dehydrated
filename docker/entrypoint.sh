@@ -22,7 +22,7 @@ fi
 # Check if we should register a new account
 if [ "${REGISTER}" = "true" ]; then
     echo "${GREEN}Registering with Let's Encrypt${NC}"
-    exec dehydrated -f "${BASEDIR}/config" --register --accept-terms
+    exec ./dehydrated -f "${BASEDIR}/config" --register --accept-terms
 
     exit 0
 fi

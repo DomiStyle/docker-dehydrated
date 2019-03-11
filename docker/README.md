@@ -34,7 +34,7 @@ If your provider uses tokens to authenticate you, you can request certificates l
 
 * \<provider name\> is the name taken from the Lexicon provider list in lower case, for example: digitalocean, cloudflare, ...
 
-* \<PROVIDER NAME>\ is the same as above but in uppercase, for example: DIGITALOCEAN, CLOUDFLARE
+* \<PROVIDER NAME\> is the same as above but in uppercase, for example: DIGITALOCEAN, CLOUDFLARE
 
 * \<your token\> is the token you received from your provider for their API
 
@@ -46,11 +46,11 @@ If your provider uses passwords to authenticate you, you can request certificate
 
 * \<provider name\> is the name taken from the Lexicon provider list in lower case, for example: digitalocean, cloudflare, ...
 
-* \<PROVIDER NAME>\ is the same as above but in uppercase, for example: DIGITALOCEAN, CLOUDFLARE
+* \<PROVIDER NAME\> is the same as above but in uppercase, for example: DIGITALOCEAN, CLOUDFLARE
 
 * \<your username\> is the username you use to login
 
-* \<your password\> is the passwor you use to login
+* \<your password\> is the password you use to login
 
 ### HTTP-01 validation
 

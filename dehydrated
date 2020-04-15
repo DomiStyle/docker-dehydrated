@@ -408,17 +408,17 @@ init_system() {
       ACCOUNT_URL="${CA_REG}/${ACCOUNT_ID}"
     else
       if [[ -e "${ACCOUNT_ID_JSON}" ]]; then
-        ACCOUNT_ID="$(cat "${ACCOUNT_ID_JSON}" | get_json_string_value id)"
-      else
-        echo "+ Fetching account ID..."
+        ACCOUNT_URL="$(cat "${ACCOUNT_ID_JSON}" | get_json_string_value url)"
+      fi
+      # if account URL is not storred, fetch it from the CA
+      if [[ -z "${ACCOUNT_URL:-}" ]]; then
+        echo "+ Fetching account URL..."
         ACCOUNT_URL="$(signed_request "${CA_NEW_ACCOUNT}" '{"onlyReturnExisting": true}' 4>&1 | grep -i ^Location: | awk '{print $2}' | tr -d '\r\n')"
-        ACCOUNT_ID="${ACCOUNT_URL##*/}"
-        if [[ -z "${ACCOUNT_ID}" ]]; then
+        if [[ -z "${ACCOUNT_URL}" ]]; then
           _exiterr "Unknown error on fetching account information"
         fi
-        echo '{"id": "'"${ACCOUNT_ID}"'"}' > "${ACCOUNT_ID_JSON}"
+        echo '{"url":"'"${ACCOUNT_URL}"'"}' > "${ACCOUNT_ID_JSON}" # store the URL for next time
       fi
-      ACCOUNT_URL="${CA_ACCOUNT}/${ACCOUNT_ID}"
     fi
   else
     echo "Fetching missing account information from CA..."
@@ -428,7 +428,6 @@ init_system() {
       ACCOUNT_URL="$(signed_request "${CA_NEW_ACCOUNT}" '{"onlyReturnExisting": true}' 4>&1 | grep -i ^Location: | awk '{print $2}' | tr -d '\r\n')"
       ACCOUNT_INFO="$(signed_request "${ACCOUNT_URL}" '{}')"
     fi
-    ACCOUNT_ID="${ACCOUNT_URL##*/}"
     echo "${ACCOUNT_INFO}" > "${ACCOUNT_KEY_JSON}"
   fi
 }
@@ -699,7 +698,8 @@ sign_csr() {
     challenge_identifiers="[${challenge_identifiers%, }]"
 
     echo " + Requesting new certificate order from CA..."
-    result="$(signed_request "${CA_NEW_ORDER}" '{"identifiers": '"${challenge_identifiers}"'}')"
+    order_location="$(signed_request "${CA_NEW_ORDER}" '{"identifiers": '"${challenge_identifiers}"'}' 4>&1 | grep -i ^Location: | awk '{print $2}' | tr -d '\r\n')"
+    result="$(signed_request "${order_location}" "" | clean_json)"
 
     order_authorizations="$(echo ${result} | get_json_array_value authorizations)"
     finalize="$(echo "${result}" | get_json_string_value finalize)"
@@ -809,7 +809,7 @@ sign_csr() {
     if [[ ${API} -eq 1 ]]; then
       result="$(signed_request "${challenge_uris[${idx}]}" '{"resource": "challenge", "keyAuthorization": "'"${keyauths[${idx}]}"'"}' | clean_json)"
     else
-      result="$(signed_request "${challenge_uris[${idx}]}" '{"keyAuthorization": "'"${keyauths[${idx}]}"'"}' | clean_json)"
+      result="$(signed_request "${challenge_uris[${idx}]}" '{}' | clean_json)"
     fi
 
     reqstatus="$(printf '%s\n' "${result}" | get_json_string_value status)"
@@ -867,8 +867,26 @@ sign_csr() {
     crt64="$(signed_request "${CA_NEW_CERT}" '{"resource": "new-cert", "csr": "'"${csr64}"'"}' | "${OPENSSL}" base64 -e)"
     crt="$( printf -- '-----BEGIN CERTIFICATE-----\n%s\n-----END CERTIFICATE-----\n' "${crt64}" )"
   else
-    result="$(signed_request "${finalize}" '{"csr": "'"${csr64}"'"}' | clean_json | get_json_string_value certificate)"
-    crt="$(signed_request "${result}" "")"
+    result="$(signed_request "${finalize}" '{"csr": "'"${csr64}"'"}' | clean_json)"
+    while :; do
+      status="$(echo "${result}" | get_json_string_value status)"
+      case "${status}"
+      in
+        "processing" | "pending")
+          echo " + Order is ${status}..."
+          sleep 2;
+          ;;
+        "valid")
+          break;
+          ;;
+        *)
+          _exiterr "Order in status ${status}"
+          ;;
+      esac
+      result="$(signed_request "${order_location}" "" | clean_json)"
+    done
+    certificate="$(echo "${result}" | get_json_string_value certificate)"
+    crt="$(signed_request "${certificate}" "")"
   fi
 
   # Try to load the certificate to detect corruption
@@ -1136,12 +1154,12 @@ command_account() {
 
   NEW_ACCOUNT_KEY_JSON="$(_mktemp)"
 
-  # Check if we have the registration id
-  if [[ -z "${ACCOUNT_ID}" ]]; then
-    _exiterr "Error retrieving registration id."
+  # Check if we have the registration url
+  if [[ -z "${ACCOUNT_URL}" ]]; then
+    _exiterr "Error retrieving registration url."
   fi
 
-  echo "+ Updating registration id: ${ACCOUNT_ID} contact information..."
+  echo "+ Updating registration url: ${ACCOUNT_URL} contact information..."
   if [[ ${API} -eq 1 ]]; then
     # If an email for the contact has been provided then adding it to the registered account
     if [[ -n "${CONTACT_EMAIL}" ]]; then
@@ -1328,7 +1346,7 @@ command_sign_domains() {
       valid="$("${OPENSSL}" x509 -enddate -noout -in "${cert}" | cut -d= -f2- )"
 
       printf " + Valid till %s " "${valid}"
-      if "${OPENSSL}" x509 -checkend $((RENEW_DAYS * 86400)) -noout -in "${cert}"; then
+      if ("${OPENSSL}" x509 -checkend $((RENEW_DAYS * 86400)) -noout -in "${cert}" > /dev/null 2>&1); then
         printf "(Longer than %d days). " "${RENEW_DAYS}"
         if [[ "${force_renew}" = "yes" ]]; then
           echo "Ignoring because renew was forced!"
@@ -1379,7 +1397,7 @@ command_sign_domains() {
         ln -sf "ocsp-${ocsp_timestamp}.der" "${certdir}/ocsp.der"
         [[ -n "${HOOK}" ]] && altnames="${domain} ${morenames}" "${HOOK}" "deploy_ocsp" "${domain}" "${certdir}/ocsp.der" "${ocsp_timestamp}"
       else
-        echo " + OSCP stapling file is still valid (skipping update)"
+        echo " + OCSP stapling file is still valid (skipping update)"
       fi
     fi
   done

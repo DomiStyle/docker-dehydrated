@@ -31,8 +31,6 @@ SCRIPTDIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 BASEDIR="${SCRIPTDIR}"
 ORIGARGS="$@"
 
-#!/bin/sh
-
 # Generate json.sh path matching string
 json_path() {
 	if [ ! "${1}" = "-p" ]; then
@@ -45,27 +43,34 @@ json_path() {
 # Get string value from json dictionary
 get_json_string_value() {
   local filter
-  filter="$(printf 's/.*\[%s\]\s*"\([^"]*\)"/\\1/p' "$(json_path "${1:-}" "${2:-}")")"
+  filter="$(printf 's/.*\[%s\][[:space:]]*"\([^"]*\)"/\\1/p' "$(json_path "${1:-}" "${2:-}")")"
   sed -n "${filter}"
 }
 
 # Get array values from json dictionary
 get_json_array_values() {
-  grep -E '^\['"$(json_path "${1:-}" "${2:-}")"',[0-9]*\]' | sed -e 's/\[[^\]*\]\s*//g' -e 's/^"//' -e 's/"$//'
+  grep -E '^\['"$(json_path "${1:-}" "${2:-}")"',[0-9]*\]' | sed -e 's/\[[^\]*\][[:space:]]*//g' -e 's/^"//' -e 's/"$//'
 }
 
 # Get sub-dictionary from json
 get_json_dict_value() {
   local filter
 	echo "$(json_path "${1:-}" "${2:-}")"
-  filter="$(printf 's/.*\[%s\]\s*\(.*\)/\\1/p' "$(json_path "${1:-}" "${2:-}")")"
+  filter="$(printf 's/.*\[%s\][[:space:]]*\(.*\)/\\1/p' "$(json_path "${1:-}" "${2:-}")")"
   sed -n "${filter}" | jsonsh
 }
 
 # Get integer value from json
 get_json_int_value() {
   local filter
-  filter="$(printf 's/.*\[%s\]\s*\([^"]*\)/\\1/p' "$(json_path "${1:-}" "${2:-}")")"
+  filter="$(printf 's/.*\[%s\][[:space:]]*\([^"]*\)/\\1/p' "$(json_path "${1:-}" "${2:-}")")"
+  sed -n "${filter}"
+}
+
+# Get boolean value from json
+get_json_bool_value() {
+  local filter
+  filter="$(printf 's/.*\[%s\][[:space:]]*\([^"]*\)/\\1/p' "$(json_path "${1:-}" "${2:-}")")"
   sed -n "${filter}"
 }
 
@@ -231,7 +236,7 @@ _mktemp() {
 # Check for script dependencies
 check_dependencies() {
   # look for required binaries
-  for binary in grep mktemp diff sed awk curl cut; do 
+  for binary in grep mktemp diff sed awk curl cut; do
     bin_path="$(command -v "${binary}" 2>/dev/null)" || _exiterr "This script requires ${binary}."
     [[ -x "${bin_path}" ]] || _exiterr "${binary} found in PATH but it's not executable"
   done
@@ -312,8 +317,15 @@ load_config() {
     done
   fi
 
+  # Preset
+  CA_ZEROSSL="https://acme.zerossl.com/v2/DV90"
+  CA_LETSENCRYPT="https://acme-v02.api.letsencrypt.org/directory"
+  CA_LETSENCRYPT_TEST="https://acme-staging-v02.api.letsencrypt.org/directory"
+  CA_BUYPASS="https://api.buypass.com/acme/directory"
+  CA_BUYPASS_TEST="https://api.test4.buypass.no/acme/directory"
+
   # Default values
-  CA="https://acme-v02.api.letsencrypt.org/directory"
+  CA="letsencrypt"
   OLDCA=
   CERTDIR=
   ALPNCERTDIR=
@@ -383,26 +395,29 @@ load_config() {
   # Check for missing dependencies
   check_dependencies
 
+  has_sudo() {
+    command -v sudo > /dev/null 2>&1 || _exiterr "DEHYDRATED_USER set but sudo not available. Please install sudo."
+  }
+
   # Check if we are running & are allowed to run as root
   if [[ -n "$DEHYDRATED_USER" ]]; then
-    command -v sudo > /dev/null 2>&1 || _exiterr "DEHYDRATED_USER set but sudo not available. Please install sudo."
     command -v getent > /dev/null 2>&1 || _exiterr "DEHYDRATED_USER set but getent not available. Please install getent."
 
-    TARGET_UID="$(getent passwd "${DEHYDRATED_USER}" | cut -d':' -f3)"
+    TARGET_UID="$(getent passwd "${DEHYDRATED_USER}" | cut -d':' -f3)" || _exiterr "DEHYDRATED_USER ${DEHYDRATED_USER} is invalid"
     if [[ -z "${DEHYDRATED_GROUP}" ]]; then
       if [[ "${EUID}" != "${TARGET_UID}" ]]; then
         echo "# INFO: Running $0 as ${DEHYDRATED_USER}"
-        exec sudo -u "${DEHYDRATED_USER}" "${0}" ${ORIGARGS}
+        has_sudo && exec sudo -u "${DEHYDRATED_USER}" "${0}" ${ORIGARGS}
       fi
     else
-      TARGET_GID="$(getent group "${DEHYDRATED_GROUP}" | cut -d':' -f3)"
+      TARGET_GID="$(getent group "${DEHYDRATED_GROUP}" | cut -d':' -f3)" || _exiterr "DEHYDRATED_GROUP ${DEHYDRATED_GROUP} is invalid"
       if [[ -z "${EGID:-}" ]]; then
         command -v id > /dev/null 2>&1 || _exiterr "DEHYDRATED_GROUP set, don't know current gid and 'id' not available... Please provide 'id' binary."
         EGID="$(id -g)"
       fi
       if [[ "${EUID}" != "${TARGET_UID}" ]] || [[ "${EGID}" != "${TARGET_GID}" ]]; then
         echo "# INFO: Running $0 as ${DEHYDRATED_USER}/${DEHYDRATED_GROUP}"
-        exec sudo -u "${DEHYDRATED_USER}" -g "${DEHYDRATED_GROUP}" "${0}" ${ORIGARGS}
+        has_sudo && exec sudo -u "${DEHYDRATED_USER}" -g "${DEHYDRATED_GROUP}" "${0}" ${ORIGARGS}
       fi
     fi
   elif [[ -n "${DEHYDRATED_GROUP}" ]]; then
@@ -414,6 +429,24 @@ load_config() {
 
   # Check BASEDIR and set default variables
   [[ -d "${BASEDIR}" ]] || _exiterr "BASEDIR does not exist: ${BASEDIR}"
+
+  # Check for ca cli parameter
+  if [ -n "${PARAM_CA:-}" ]; then
+    CA="${PARAM_CA}"
+  fi
+
+  # Preset CAs
+  if [ "${CA}" = "letsencrypt" ]; then
+    CA="${CA_LETSENCRYPT}"
+  elif [ "${CA}" = "letsencrypt-test" ]; then
+    CA="${CA_LETSENCRYPT_TEST}"
+  elif [ "${CA}" = "zerossl" ]; then
+    CA="${CA_ZEROSSL}"
+  elif [ "${CA}" = "buypass" ]; then
+    CA="${CA_BUYPASS}"
+  elif [ "${CA}" = "buypass-test" ]; then
+    CA="${CA_BUYPASS_TEST}"
+  fi
 
   if [[ -z "${OLDCA}" ]] && [[ "${CA}" = "https://acme-v02.api.letsencrypt.org/directory" ]]; then
     OLDCA="https://acme-v01.api.letsencrypt.org/directory"
@@ -441,6 +474,11 @@ load_config() {
   ACCOUNT_KEY="${ACCOUNTDIR}/${CAHASH}/account_key.pem"
   ACCOUNT_KEY_JSON="${ACCOUNTDIR}/${CAHASH}/registration_info.json"
   ACCOUNT_ID_JSON="${ACCOUNTDIR}/${CAHASH}/account_id.json"
+  ACCOUNT_DEACTIVATED="${ACCOUNTDIR}/${CAHASH}/deactivated"
+
+  if [[ -f "${ACCOUNT_DEACTIVATED}" ]]; then
+    _exiterr "Account has been deactivated. Remove account and create a new one using --register."
+  fi
 
   if [[ -f "${BASEDIR}/private_key.pem" ]] && [[ ! -f "${ACCOUNT_KEY}" ]]; then
     echo "! Moving private_key.pem to ${ACCOUNT_KEY}"
@@ -502,6 +540,7 @@ init_system() {
     CA_NEW_AUTHZ="$(printf "%s" "${CA_DIRECTORY}" | get_json_string_value new-authz)" &&
     CA_NEW_REG="$(printf "%s" "${CA_DIRECTORY}" | get_json_string_value new-reg)" &&
     CA_TERMS="$(printf "%s" "${CA_DIRECTORY}" | get_json_string_value terms-of-service)" &&
+    CA_REQUIRES_EAB="false" &&
     CA_REVOKE_CERT="$(printf "%s" "${CA_DIRECTORY}" | get_json_string_value revoke-cert)" ||
     _exiterr "Problem retrieving ACME/CA-URLs, check if your configured CA points to the directory entrypoint."
     # Since reg URI is missing from directory we will assume it is the same as CA_NEW_REG without the new part
@@ -511,7 +550,8 @@ init_system() {
     CA_NEW_ORDER="$(printf "%s" "${CA_DIRECTORY}" | get_json_string_value newOrder)" &&
     CA_NEW_NONCE="$(printf "%s" "${CA_DIRECTORY}" | get_json_string_value newNonce)" &&
     CA_NEW_ACCOUNT="$(printf "%s" "${CA_DIRECTORY}" | get_json_string_value newAccount)" &&
-    CA_TERMS="$(printf "%s" "${CA_DIRECTORY}" | get_json_string_value termsOfService)" &&
+    CA_TERMS="$(printf "%s" "${CA_DIRECTORY}" | get_json_string_value -p '"meta","termsOfService"')" &&
+    CA_REQUIRES_EAB="$(printf "%s" "${CA_DIRECTORY}" | get_json_bool_value -p '"meta","externalAccountRequired"' || echo false)" &&
     CA_REVOKE_CERT="$(printf "%s" "${CA_DIRECTORY}" | get_json_string_value revokeCert)" ||
     _exiterr "Problem retrieving ACME/CA-URLs, check if your configured CA points to the directory entrypoint."
     # Since acct URI is missing from directory we will assume it is the same as CA_NEW_ACCOUNT without the new part
@@ -523,6 +563,7 @@ init_system() {
 
   # Checking for private key ...
   register_new_key="no"
+  generated="false"
   if [[ -n "${PARAM_ACCOUNT_KEY:-}" ]]; then
     # a private key was specified from the command line so use it for this run
     echo "Using private key ${PARAM_ACCOUNT_KEY} instead of account key"
@@ -541,6 +582,7 @@ init_system() {
       fi
 
       echo "+ Generating account key..."
+      generated="true"
       local tmp_account_key="$(_mktemp)"
       _openssl genrsa -out "${tmp_account_key}" "${KEYSIZE}"
       cat "${tmp_account_key}" > "${ACCOUNT_KEY}"
@@ -566,6 +608,35 @@ init_system() {
       FAILED=true
     fi
 
+    # ZeroSSL special sauce
+    if [[ "${CA}" = "${CA_ZEROSSL}" ]]; then
+      if [[ -z "${EAB_KID:-}" ]] ||  [[ -z "${EAB_HMAC_KEY:-}" ]]; then
+        if [[ -z "${CONTACT_EMAIL}" ]]; then
+          echo "ZeroSSL requires contact email to be set or EAB_KID/EAB_HMAC_KEY to be manually configured"
+          FAILED=true
+        else
+          zeroapi="$(curl -s "https://api.zerossl.com/acme/eab-credentials-email" -d "email=${CONTACT_EMAIL}" | jsonsh)"
+          EAB_KID="$(printf "%s" "${zeroapi}" | get_json_string_value eab_kid)"
+          EAB_HMAC_KEY="$(printf "%s" "${zeroapi}" | get_json_string_value eab_hmac_key)"
+          if [[ -z "${EAB_KID:-}" ]] ||  [[ -z "${EAB_HMAC_KEY:-}" ]]; then
+            echo "Unknown error retrieving ZeroSSL API credentials"
+            echo "${zeroapi}"
+            FAILED=true
+          fi
+        fi
+      fi
+    fi
+
+    # Check if external account is required
+    if [[ "${FAILED}" = "false" ]]; then
+      if [[ "${CA_REQUIRES_EAB}" = "true" ]]; then
+        if [[ -z "${EAB_KID:-}" ]] || [[ -z "${EAB_HMAC_KEY:-}" ]]; then
+          FAILED=true
+          echo "This CA requires an external account but no EAB_KID/EAB_HMAC_KEY has been configured"
+        fi
+      fi
+    fi
+
     # If an email for the contact has been provided then adding it to the registration request
     if [[ "${FAILED}" = "false" ]]; then
       if [[ ${API} -eq 1 ]]; then
@@ -575,11 +646,26 @@ init_system() {
           (signed_request "${CA_NEW_REG}" '{"resource": "new-reg", "agreement": "'"${CA_TERMS}"'"}' > "${ACCOUNT_KEY_JSON}") || FAILED=true
         fi
       else
-        if [[ -n "${CONTACT_EMAIL}" ]]; then
-          (signed_request "${CA_NEW_ACCOUNT}" '{"contact":["mailto:'"${CONTACT_EMAIL}"'"], "termsOfServiceAgreed": true}' > "${ACCOUNT_KEY_JSON}") || FAILED=true
+        if [[ -n "${EAB_KID:-}" ]] && [[ -n "${EAB_HMAC_KEY:-}" ]]; then
+          eab_url="${CA_NEW_ACCOUNT}"
+          eab_protected64="$(printf '{"alg":"HS256","kid":"%s","url":"%s"}' "${EAB_KID}" "${eab_url}" | urlbase64)"
+          eab_payload64="$(printf "%s" '{"e": "'"${pubExponent64}"'", "kty": "RSA", "n": "'"${pubMod64}"'"}' | urlbase64)"
+          eab_key="$(printf "%s" "${EAB_HMAC_KEY}" | deurlbase64 | bin2hex)"
+          eab_signed64="$(printf '%s' "${eab_protected64}.${eab_payload64}" | "${OPENSSL}" dgst -binary -sha256 -mac HMAC -macopt "hexkey:${eab_key}" | urlbase64)"
+
+          if [[ -n "${CONTACT_EMAIL}" ]]; then
+            regjson='{"contact":["mailto:'"${CONTACT_EMAIL}"'"], "termsOfServiceAgreed": true, "externalAccountBinding": {"protected": "'"${eab_protected64}"'", "payload": "'"${eab_payload64}"'", "signature": "'"${eab_signed64}"'"}}'
+          else
+            regjson='{"termsOfServiceAgreed": true, "externalAccountBinding": {"protected": "'"${eab_protected64}"'", "payload": "'"${eab_payload64}"'", "signature": "'"${eab_signed64}"'"}}'
+          fi
         else
-          (signed_request "${CA_NEW_ACCOUNT}" '{"termsOfServiceAgreed": true}' > "${ACCOUNT_KEY_JSON}") || FAILED=true
+          if [[ -n "${CONTACT_EMAIL}" ]]; then
+            regjson='{"contact":["mailto:'"${CONTACT_EMAIL}"'"], "termsOfServiceAgreed": true}'
+          else
+            regjson='{"termsOfServiceAgreed": true}'
+          fi
         fi
+        (signed_request "${CA_NEW_ACCOUNT}" "${regjson}" > "${ACCOUNT_KEY_JSON}") || FAILED=true
       fi
     fi
 
@@ -587,7 +673,10 @@ init_system() {
       echo >&2
       echo >&2
       echo "Error registering account key. See message above for more information." >&2
-      rm "${ACCOUNT_KEY}" "${ACCOUNT_KEY_JSON}"
+      if [[ "${generated}" = "true" ]]; then
+        rm "${ACCOUNT_KEY}"
+      fi
+      rm -f "${ACCOUNT_KEY_JSON}"
       exit 1
     fi
   elif [[ "${COMMAND:-}" = "register" ]]; then
@@ -653,10 +742,25 @@ urlbase64() {
   "${OPENSSL}" base64 -e | tr -d '\n\r' | _sed -e 's:=*$::g' -e 'y:+/:-_:'
 }
 
+# Decode data from url-safe formatted base64
+deurlbase64() {
+  data="$(cat | tr -d ' \n\r')"
+  modlen=$((${#data} % 4))
+  padding=""
+  if [[ "${modlen}" = "2" ]]; then padding="==";
+  elif [[ "${modlen}" = "3" ]]; then padding="="; fi
+  printf "%s%s" "${data}" "${padding}" | tr -d '\n\r' | _sed -e 'y:-_:+/:' | "${OPENSSL}" base64 -d -A
+}
+
 # Convert hex string to binary data
 hex2bin() {
   # Remove spaces, add leading zero, escape as hex string and parse with printf
   printf -- "$(cat | _sed -e 's/[[:space:]]//g' -e 's/^(.(.{2})*)$/0\1/' -e 's/(.{2})/\\x\1/g')"
+}
+
+# Convert binary data to hex string
+bin2hex() {
+  hexdump -e '16/1 "%02x"'
 }
 
 # OpenSSL writes to stderr/stdout even when there are no errors. So just
@@ -900,10 +1004,10 @@ sign_csr() {
     fi
 
     # Find challenge in authorization
-    challengeindex="$(echo "${response}" | grep -E '^\["challenges",[0-9]+,"type"\]\s+"'"${CHALLENGETYPE}"'"' | cut -d',' -f2 || true)"
+    challengeindex="$(echo "${response}" | grep -E '^\["challenges",[0-9]+,"type"\][[:space:]]+"'"${CHALLENGETYPE}"'"' | cut -d',' -f2 || true)"
 
     if [ -z "${challengeindex}" ]; then
-      allowed_validations="$(echo "${response}" | grep -E '^\["challenges",[0-9]+,"type"\]' | sed -e 's/\[[^\]*\]\s*//g' -e 's/^"//' -e 's/"$//' | tr '\n' ' ')"
+      allowed_validations="$(echo "${response}" | grep -E '^\["challenges",[0-9]+,"type"\]' | sed -e 's/\[[^\]*\][[:space:]]*//g' -e 's/^"//' -e 's/"$//' | tr '\n' ' ')"
       _exiterr "Validating this certificate is not possible using ${CHALLENGETYPE}. Possible validation methods are: ${allowed_validations}"
     fi
     challenge="$(echo "${response}" | get_json_dict_value -p '"challenges",'"${challengeindex}")"
@@ -915,6 +1019,9 @@ sign_csr() {
     if [[ ${API} -eq 2 ]]; then
       challenge_uris[${idx}]="$(echo "${challenge}" | get_json_string_value url)"
     else
+      if [[ "$(echo "${challenge}" | get_json_string_value type)" = "urn:acme:error:unauthorized" ]]; then
+        _exiterr "Challenge unauthorized: $(echo "${challenge}" | get_json_string_value detail)"
+      fi
       challenge_uris[${idx}]="$(echo "${challenge}" | get_json_dict_value validationRecord | get_json_string_value uri)"
     fi
 
@@ -975,7 +1082,7 @@ sign_csr() {
 
     reqstatus="$(echo "${result}" | get_json_string_value status)"
 
-    while [[ "${reqstatus}" = "pending" ]]; do
+    while [[ "${reqstatus}" = "pending" ]] || [[ "${reqstatus}" = "processing" ]]; do
       sleep 1
       if [[ "${API}" -eq 2 ]]; then
         result="$(signed_request "${challenge_uris[${idx}]}" "" | jsonsh)"
@@ -1279,6 +1386,10 @@ command_version() {
   echo ""
   if [[ "${OSTYPE}" =~ "BSD" ]]; then
     echo "OS: $(uname -sr)"
+  elif [[ -e /etc/os-release ]]; then
+    ( . /etc/os-release && echo "OS: $PRETTY_NAME" )
+  elif [[ -e /usr/lib/os-release ]]; then
+    ( . /usr/lib/os-release && echo "OS: $PRETTY_NAME" )
   else
     echo "OS: $(cat /etc/issue | grep -v ^$ | head -n1 | _sed 's/\\(r|n|l) .*//g')"
   fi
@@ -1667,6 +1778,28 @@ command_revoke() {
   mv -f "${cert}" "${cert}-revoked"
 }
 
+# Usage: --deactivate
+# Description: Deactivate account
+command_deactivate() {
+  init_system
+
+  echo "Deactivating account ${ACCOUNT_URL}"
+
+  if [[ ${API} -eq 1 ]]; then
+    echo "Deactivation for ACMEv1 is not implemented"
+  else
+    response="$(signed_request "${ACCOUNT_URL}" '{"status": "deactivated"}' | clean_json)"
+    deactstatus=$(echo "$response" | jsonsh | get_json_string_value "status")
+    if [[ "${deactstatus}" = "deactivated" ]]; then
+      touch "${ACCOUNT_DEACTIVATED}"
+    else
+      _exiterr "Account deactivation failed!"
+    fi
+  fi
+
+  echo " + Done."
+}
+
 # Usage: --cleanup (-gc)
 # Description: Move unused certificate files to archive directory
 command_cleanup() {
@@ -1819,6 +1952,10 @@ main() {
         PARAM_REVOKECERT="${1}"
         ;;
 
+      --deactivate)
+        set_command deactivate
+        ;;
+
       --version|-v)
         set_command version
         ;;
@@ -1855,6 +1992,15 @@ main() {
         else
           PARAM_DOMAIN="${PARAM_DOMAIN} ${1}"
          fi
+        ;;
+
+      # PARAM_Usage: --ca url/preset
+      # PARAM_Description: Use specified CA URL or preset
+      --ca)
+        shift 1
+        check_parameters "${1:-}"
+        [[ -n "${PARAM_CA:-}" ]] && _exiterr "CA can only be specified once!"
+        PARAM_CA="${1}"
         ;;
 
       # PARAM_Usage: --alias certalias
@@ -1972,6 +2118,7 @@ main() {
     account) command_account;;
     sign_csr) command_sign_csr "${PARAM_CSR}";;
     revoke) command_revoke "${PARAM_REVOKECERT}";;
+    deactivate) command_deactivate;;
     cleanup) command_cleanup;;
     version) command_version;;
     *) command_help; exit 1;;
